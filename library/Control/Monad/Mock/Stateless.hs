@@ -21,6 +21,7 @@ module Control.Monad.Mock.Stateless
   -- * Actions and actions with results
   , Action(..)
   , WithResult(..)
+  , withResultHmap
   ) where
 
 import Control.Monad.Base (MonadBase)
@@ -47,13 +48,17 @@ type MockT f m = MockT_ (PrimState m) m f m
 type Mock s f = MockT f (ST s)
 
 -- | Represents both an expected call (an 'Action') and its expected result.
-data WithResult m f where
+data WithResult f m where
   -- | Matches a specific command
-  (:->)     :: f r -> m r -> WithResult m f
+  (:->)     :: f r -> m r -> WithResult f m
   -- | Skips commands as long as the predicate returns something
-  SkipWhile :: (forall r. f r -> Maybe (m r)) -> WithResult m f
+  SkipWhile :: (forall r. f r -> Maybe (m r)) -> WithResult f m
 
-newtype MockT_ s n f m a = MockT (ReaderT (MutVar s [WithResult n f]) m a)
+withResultHmap :: (forall a . m a -> n a) -> WithResult f m -> WithResult f n
+withResultHmap f (a :-> mb) = a :-> f mb
+withResultHmap f (SkipWhile cond) = SkipWhile (fmap f . cond)
+
+newtype MockT_ s n f m a = MockT (ReaderT (MutVar s [WithResult f n]) m a)
   deriving ( Functor, Applicative, Monad, MonadIO, MonadFix
            , MonadState st, MonadCont, MonadError e, MonadWriter w
            , MonadCatch, MonadThrow, MonadMask
@@ -69,7 +74,7 @@ instance MonadReader r m => MonadReader r (MockT_ s n f m) where
 
 runMockT :: forall f m a .
             (Action f, PrimMonad m) =>
-            [WithResult m f] -> MockT f m a -> m a
+            [WithResult f m] -> MockT f m a -> m a
 runMockT actions (MockT x) = do
   ref <- newMutVar actions
   r <- runReaderT x ref
@@ -80,7 +85,7 @@ runMockT actions (MockT x) = do
       $ "runMockT: expected the following unexecuted actions to be run:\n"
       ++ unlines (map (\(action :-> _) -> "  " ++ showAction action) remainingActions)
 
-runMock :: forall f a. Action f => [WithResult Identity f] -> (forall s. Mock s f a) -> a
+runMock :: forall f a. Action f => [WithResult f Identity] -> (forall s. Mock s f a) -> a
 runMock actions x = runST $ runMockT (map (\(a :-> b) -> a :-> return(runIdentity b)) actions) x
 
 instance (PrimMonad m, PrimState m ~ s) => MonadMock f (MockT_ s m f m) where
