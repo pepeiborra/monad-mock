@@ -51,12 +51,15 @@ type Mock s f = MockT f (ST s)
 data WithResult f m where
   -- | Matches a specific command
   (:->)     :: f r -> m r -> WithResult f m
+  -- | Matches one of a set of commands
+  Match     :: String -> (forall r. f r -> Maybe (m r)) -> WithResult f m
   -- | Skips commands as long as the predicate returns something
   SkipWhile :: (forall r. f r -> Maybe (m r)) -> WithResult f m
 
 withResultHmap :: (forall a . m a -> n a) -> WithResult f m -> WithResult f n
 withResultHmap f (a :-> mb) = a :-> f mb
 withResultHmap f (SkipWhile cond) = SkipWhile (fmap f . cond)
+withResultHmap f (Match name cond) = Match name (fmap f . cond)
 
 newtype MockT_ s n f m a = MockT {unMockT :: ReaderT (MutVar s [WithResult f n]) m a}
   deriving ( Functor, Applicative, Monad, MonadIO, MonadFix
@@ -104,6 +107,14 @@ instance (PrimMonad m, PrimState m ~ s) => MonadMock f (MockT_ s m f m) where
         | otherwise -> do
             lift $ writeMutVar ref actions
             mockAction fnName action
+      Match name f : actions
+        | Just res <- f action -> do
+            lift $ writeMutVar ref actions
+            lift res
+        | otherwise -> error'
+            $ "runMockT: argument mismatch in " ++ fnName ++ "\n"
+            ++ "  given: " ++ showAction action ++ "\n"
+            ++ "  expected: " ++ name
       (action' :-> r) : actions
         | Just Refl <- action `eqAction` action' -> do
             lift $ writeMutVar ref actions
