@@ -1,5 +1,6 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE CPP #-}
+{-# OPTIONS -Wno-deprecations #-}
 
 {-|
 This module provides a monad transformer that helps create “mocks” of
@@ -80,15 +81,21 @@ module Control.Monad.Mock
 
 import Control.Monad.Base (MonadBase)
 import Control.Monad.Catch (MonadCatch, MonadThrow, MonadMask)
-import Control.Monad.Cont (MonadCont)
-import Control.Monad.Except (MonadError)
+import Control.Monad.Cont (ContT, MonadCont)
+import Control.Monad.Except (ExceptT, MonadError)
 import Control.Monad.Fix
 import Control.Monad.IO.Class (MonadIO)
-import Control.Monad.Reader (MonadReader)
+import Control.Monad.Identity (IdentityT)
+import Control.Monad.Reader (ReaderT, MonadReader)
 import Control.Monad.State (StateT, MonadState(..), runStateT)
 import Control.Monad.Trans (MonadTrans(..))
 import Control.Monad.Trans.Control (ComposeSt, MonadBaseControl(..), MonadTransControl(..), defaultLiftBaseWith, defaultLiftWith, defaultRestoreM, defaultRestoreT)
-import Control.Monad.Writer (MonadWriter)
+import Control.Monad.Trans.Error (Error, ErrorT)
+import Control.Monad.Trans.List (ListT)
+import Control.Monad.Trans.Maybe (MaybeT)
+import Control.Monad.Trans.RWS (RWST)
+import Control.Monad.Trans.Select (SelectT)
+import Control.Monad.Writer (WriterT, MonadWriter)
 import Data.Constraint ((:-), (\\))
 import Data.Constraint.Forall (ForallF, instF)
 import Data.Functor.Identity (Identity, runIdentity)
@@ -168,7 +175,7 @@ runMockT actions (MockT x) = runStateT x actions >>= \case
 runMock :: forall f a. Action f => [WithResult f] -> Mock f a -> a
 runMock actions x = runIdentity $ runMockT actions x
 
-class MonadMock f m where
+class Monad m => MonadMock f m where
   -- | Logs a method call within a mock.
   mockAction :: Action f => String -> f r -> m r
 
@@ -183,3 +190,33 @@ instance Monad m => MonadMock f (MockT f m) where
           $ "runMockT: argument mismatch in " ++ fnName ++ "\n"
           ++ "  given: " ++ showAction action ++ "\n"
           ++ "  expected: " ++ showAction action' ++ "\n"
+
+instance MonadMock f m => MonadMock f (ContT r m) where
+  mockAction fn act = lift $ mockAction fn act
+
+instance (Error e, MonadMock f m) => MonadMock f (ErrorT e m) where
+  mockAction fn act = lift $ mockAction fn act
+
+instance MonadMock f m => MonadMock f (ExceptT e m) where
+  mockAction fn act = lift $ mockAction fn act
+
+instance MonadMock f m => MonadMock f (IdentityT m) where
+  mockAction fn act = lift $ mockAction fn act
+
+instance MonadMock f m => MonadMock f (ListT m) where
+  mockAction fn act = lift $ mockAction fn act
+
+instance MonadMock f m => MonadMock f (MaybeT m) where
+  mockAction fn act = lift $ mockAction fn act
+
+instance (Monoid w, MonadMock f m) => MonadMock f (RWST r w s m) where
+  mockAction fn act = lift $ mockAction fn act
+
+instance MonadMock f m => MonadMock f (ReaderT r m) where
+  mockAction fn act = lift $ mockAction fn act
+
+instance MonadMock f m => MonadMock f (SelectT r m) where
+  mockAction fn act = lift $ mockAction fn act
+
+instance (Monoid w, MonadMock f m) => MonadMock f (WriterT w m) where
+  mockAction fn act = lift $ mockAction fn act

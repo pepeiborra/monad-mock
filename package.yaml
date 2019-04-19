@@ -45,16 +45,13 @@ library:
   - exceptions >= 0.6
   - haskell-src-exts
   - haskell-src-meta
-  - th-orphans
   - monad-control >= 1.0.0.0 && < 2
   - mtl
   - primitive
   - template-haskell >= 2.10.0.0 && < 2.15
+  - th-orphans
+  - transformers
   - transformers-base
-  when:
-  - condition: impl(ghc < 8)
-    dependencies:
-    - transformers
   source-dirs: library
 
 tests:
