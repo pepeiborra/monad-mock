@@ -1,9 +1,10 @@
-{-# LANGUAGE DataKinds  #-}
-{-# LANGUAGE PolyKinds  #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE CPP                  #-}
+{-# LANGUAGE DataKinds     #-}
+{-# LANGUAGE PolyKinds     #-}
+{-# LANGUAGE RankNTypes    #-}
+{-# LANGUAGE CPP           #-}
 {-# LANGUAGE UnboxedTuples #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# OPTIONS -Wredundant-constraints #-}
 
 -- | A version of 'MockT' with a stateless 'MonadTransControl' instance
 module Control.Monad.Mock.Stateless
@@ -15,7 +16,7 @@ module Control.Monad.Mock.Stateless
   , MockT
   , Mock
   , runMockT
-  , runMock
+  , runMockST
   , MockT_
 
   -- * Actions and actions with results
@@ -29,12 +30,11 @@ import Control.Monad.Catch (MonadCatch, MonadThrow, MonadMask)
 import Control.Monad.Cont (MonadCont)
 import Control.Monad.Except (MonadError)
 import Control.Monad.Fix
-import Control.Monad.Identity
 import Control.Monad.IO.Class (MonadIO)
 import Control.Monad.Primitive (PrimMonad(..))
 import Control.Monad.Reader (ReaderT(..), MonadReader(..))
 import Control.Monad.State (MonadState)
-import Control.Monad.ST (ST, runST)
+import Control.Monad.ST (ST)
 import Control.Monad.Trans (MonadTrans(..))
 import Control.Monad.Trans.Control
 import Control.Monad.Writer (MonadWriter)
@@ -58,7 +58,7 @@ withResultHmap :: (forall a . m a -> n a) -> WithResult f m -> WithResult f n
 withResultHmap f (a :-> mb) = a :-> f mb
 withResultHmap f (SkipWhile cond) = SkipWhile (fmap f . cond)
 
-newtype MockT_ s n f m a = MockT (ReaderT (MutVar s [WithResult f n]) m a)
+newtype MockT_ s n f m a = MockT {unMockT :: ReaderT (MutVar s [WithResult f n]) m a}
   deriving ( Functor, Applicative, Monad, MonadIO, MonadFix
            , MonadState st, MonadCont, MonadError e, MonadWriter w
            , MonadCatch, MonadThrow, MonadMask
@@ -74,9 +74,11 @@ instance MonadReader r m => MonadReader r (MockT_ s n f m) where
 
 runMockT :: forall f m a .
             (Action f, PrimMonad m) =>
-            [WithResult f m] -> MockT f m a -> m a
+            [WithResult f (MockT f m)] -> MockT f m a -> m a
 runMockT actions (MockT x) = do
-  ref <- newMutVar actions
+  ref <- newMutVar []
+  let actions' = withResultHmap (flip runReaderT ref . unMockT) <$> actions
+  writeMutVar ref actions'
   r <- runReaderT x ref
   leftovers <- readMutVar ref
   case leftovers of
@@ -85,8 +87,8 @@ runMockT actions (MockT x) = do
       $ "runMockT: expected the following unexecuted actions to be run:\n"
       ++ unlines (map (\(action :-> _) -> "  " ++ showAction action) remainingActions)
 
-runMock :: forall f a. Action f => [WithResult f Identity] -> (forall s. Mock s f a) -> a
-runMock actions x = runST $ runMockT (map (\(a :-> b) -> a :-> return(runIdentity b)) actions) x
+runMockST :: Action f => [WithResult f (Mock s f)] -> Mock s f a -> ST s a
+runMockST = runMockT
 
 instance (PrimMonad m, PrimState m ~ s) => MonadMock f (MockT_ s m f m) where
   mockAction fnName action = do
