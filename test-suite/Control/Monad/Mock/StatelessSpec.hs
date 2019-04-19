@@ -31,16 +31,16 @@ spec = describe "MockT" $ do
   it "runs computations with mocked method implementations" $ do
     let result = runST
           $ copyFileAndReturn "foo.txt" "bar.txt"
-          & runMockT [ ReadFile "foo.txt" :-> "file contents"
-                     , WriteFile "bar.txt" "file contents" :-> () ]
+          & runMockT [ ReadFile "foo.txt" :-> pure "file contents"
+                     , WriteFile "bar.txt" "file contents" :-> pure () ]
           & runExceptT
     result `shouldBe` Right "file contents"
 
   it "raises an exception if calls are not in the right order" $ do
     let result = runST
           $ copyFileAndReturn "foo.txt" "bar.txt"
-          & runMockT [ WriteFile "bar.txt" "file contents" :-> ()
-                     , ReadFile "foo.txt" :-> "file contents" ]
+          & runMockT [ WriteFile "bar.txt" "file contents" :-> pure ()
+                     , ReadFile "foo.txt" :-> pure "file contents" ]
           & runExceptT
         exnMessage =
           "runMockT: argument mismatch in readFile\n\
@@ -51,9 +51,9 @@ spec = describe "MockT" $ do
   it "raises an exception if calls are missing" $ do
     let result = -- running on top of IO
             copyFileAndReturn "foo.txt" "bar.txt"
-          & runMockT [ ReadFile "foo.txt" :-> "file contents"
-                     , WriteFile "bar.txt" "file contents" :-> ()
-                     , ReadFile "qux.txt" :-> "file contents 2" ]
+          & runMockT [ ReadFile "foo.txt" :-> pure "file contents"
+                     , WriteFile "bar.txt" "file contents" :-> pure ()
+                     , ReadFile "qux.txt" :-> pure "file contents 2" ]
           & runExceptT
     let exnMessage =
           "runMockT: expected the following unexecuted actions to be run:\n\
@@ -63,7 +63,7 @@ spec = describe "MockT" $ do
   it "raises an exception if there are too many calls" $ do
     let result = runST
           $ copyFileAndReturn "foo.txt" "bar.txt"
-          & runMockT [ ReadFile "foo.txt" :-> "file contents" ]
+          & runMockT [ ReadFile "foo.txt" :-> pure "file contents" ]
           & runExceptT
         exnMessage =
           "runMockT: expected end of program, called writeFile\n\

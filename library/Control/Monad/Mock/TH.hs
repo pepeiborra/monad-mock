@@ -121,10 +121,14 @@ makeAction actionNameStr classTs = do
         mkStandaloneDec derivT = standaloneDeriveD' [] (derivT `AppT` (actionTypeCon `AppT` VarT actionParamName))
         standaloneDecs = [mkStandaloneDec (ConT ''Eq), mkStandaloneDec (ConT ''Show)]
     actionInstanceDec <- deriveAction' actionTypeCon actionCons
-    classInstanceDecs1 <- zipWithM (mkInstance (ConT ''MockT) (const []) actionTypeCon) classTs methods
+    baseM <- VarT <$> newName "m"
+    classInstanceDecs1 <- zipWithM (mkInstance baseM (ConT ''MockT) [] actionTypeCon) classTs methods
     primStateVar <- newName "s"
-    let primStateConstraint baseM = [ConT ''PrimMonad `AppT` baseM, EqualityT `AppT` VarT primStateVar `AppT` (ConT ''PrimState `AppT` baseM)]
-    classInstanceDecs2 <- zipWithM (mkInstance (ConT ''Stateless.MockT_ `AppT` VarT primStateVar) primStateConstraint actionTypeCon) classTs methods
+    let primStateConstraint =
+          [ConT ''PrimMonad `AppT` baseM, EqualityT `AppT` VarT primStateVar `AppT` (ConT ''PrimState `AppT` baseM)]
+    classInstanceDecs2 <-
+      zipWithM (mkInstance baseM (ConT ''Stateless.MockT_ `AppT` VarT primStateVar `AppT` baseM)
+                primStateConstraint actionTypeCon) classTs methods
 
     return $ [actionDec] ++ standaloneDecs ++ [actionInstanceDec] ++ classInstanceDecs1 ++ classInstanceDecs2
   where
@@ -208,9 +212,8 @@ makeAction actionNameStr classTs = do
     methodNameToConstructorName name = mkName (toUpper c : cs)
       where (c:cs) = nameBase name
 
-    mkInstance :: Type -> (Type -> [Pred]) -> Type -> Type -> [Dec] -> Q Dec
-    mkInstance mockT mkExtraConstraints actionT classT methodSigs = do
-      mVar <- newName "m"
+    mkInstance :: Type -> Type -> [Pred] -> Type -> Type -> [Dec] -> Q Dec
+    mkInstance baseM mockT extraConstraints actionT classT methodSigs = do
 
       -- In order to calculate the constraints on the instance, we need to look
       -- at the superclasses of the class we're deriving an instance for. For
@@ -229,15 +232,15 @@ makeAction actionNameStr classTs = do
       -- constraints.
       (ClassI (ClassD classContext _ classBindVars _ _) _) <- reify $ unappliedTypeName classT
       let classBinds = map tyVarBndrName classBindVars
-          instanceBinds = typeArgs classT ++ [VarT mVar]
+          instanceBinds = typeArgs classT ++ [baseM]
           classBindsToInstanceBinds = zip classBinds instanceBinds
           contextSubFns = map (uncurry substituteTypeVar) classBindsToInstanceBinds
           instanceContext = foldr map classContext contextSubFns
 
-      let instanceHead = classT `AppT` (mockT `AppT` actionT `AppT` VarT mVar)
+      let instanceHead = classT `AppT` (mockT `AppT` actionT `AppT` baseM)
       methodImpls <- traverse mkInstanceMethod methodSigs
 
-      return $ instanceD' (instanceContext ++ mkExtraConstraints (VarT mVar)) instanceHead methodImpls
+      return $ instanceD' (instanceContext ++ extraConstraints) instanceHead methodImpls
 
     mkInstanceMethod :: Dec -> Q Dec
     mkInstanceMethod (SigD name typ) = do
