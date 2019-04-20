@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase  #-}
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE FunctionalDependencies #-}
@@ -69,3 +70,28 @@ spec = describe "MockT" $ do
           "runMockT: expected end of program, called writeFile\n\
           \  given action: WriteFile \"bar.txt\" \"file contents\"\n"
     evaluate result `shouldThrow` errorCall exnMessage
+
+  it "SkipWhile" $ do
+    let result = runST
+          $ copyFileAndReturn "foo.txt" "bar.txt"
+          & runMockT [ SkipWhile (\case ReadFile{} -> Just (pure "skipped") ; _ -> Nothing)
+                     , (WriteFile "bar.txt" "skipped" :-> pure ()) ]
+          & runExceptT
+    result `shouldBe` Right "skipped"
+
+  it "Match" $ do
+    let result = runST
+          $ copyFileAndReturn "foo.txt" "bar.txt"
+          & runMockT [ Match "ReadFile" (\case ReadFile{} -> Just (pure "match") ; _ -> Nothing)
+                     , WriteFile "bar.txt" "match" :-> pure () ]
+          & runExceptT
+    result `shouldBe` Right "match"
+
+  it "Either" $ do
+    let result = runST
+          $ copyFileAndReturn "foo.txt" "bar.txt"
+          & runMockT [ Either ZeroMatch (ReadFile "foo.txt" :-> pure "file contents")
+                     , Either (WriteFile "bar.txt" "file contents" :-> pure ()) ZeroMatch ]
+          & runExceptT
+    result `shouldBe` Right "file contents"
+
