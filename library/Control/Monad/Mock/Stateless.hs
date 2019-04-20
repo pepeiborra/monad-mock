@@ -25,6 +25,7 @@ module Control.Monad.Mock.Stateless
   , withResultHmap
   ) where
 
+import Control.Applicative
 import Control.Monad
 import Control.Monad.Base (MonadBase)
 import Control.Monad.Catch (MonadCatch, MonadThrow, MonadMask)
@@ -56,11 +57,17 @@ data WithResult f m where
   Match     :: String -> (forall r. f r -> Maybe (m r)) -> WithResult f m
   -- | Skips commands as long as the predicate returns something
   SkipWhile :: (forall r. f r -> Maybe (m r)) -> WithResult f m
+  -- | Choice
+  Either    :: WithResult f m -> WithResult f m -> WithResult f m
+  -- | Trivial failure
+  ZeroMatch   :: WithResult f m
 
 withResultHmap :: (forall a . m a -> n a) -> WithResult f m -> WithResult f n
 withResultHmap f (a :-> mb) = a :-> f mb
 withResultHmap f (SkipWhile cond) = SkipWhile (fmap f . cond)
 withResultHmap f (Match name cond) = Match name (fmap f . cond)
+withResultHmap f (Either a b) = Either (withResultHmap f a) (withResultHmap f b)
+withResultHmap _ ZeroMatch = ZeroMatch
 
 newtype MockT_ s n f m a = MockT {unMockT :: ReaderT (MutVar s [WithResult f n]) m a}
   deriving ( Functor, Applicative, Monad, MonadIO, MonadFix
@@ -97,31 +104,57 @@ runMockST = runMockT
 instance (PrimMonad m, PrimState m ~ s) => MonadMock f (MockT_ s m f m) where
   mockAction fnName action = do
     ref <- MockT ask
-    join $ lift $ atomicModifyMutVar ref $ \results ->
-      case results of
-        [] -> error'
-          $ "runMockT: expected end of program, called " ++ fnName ++ "\n"
-          ++ "  given action: " ++ showAction action ++ "\n"
-        SkipWhile f : actions
-          | Just res <- f action
-          -> (results, lift res)
-          | otherwise ->
-              (actions, mockAction fnName action)
-        Match name f : actions
-          | Just res <- f action ->
-              (actions, lift res)
-          | otherwise -> error'
-              $ "runMockT: argument mismatch in " ++ fnName ++ "\n"
-              ++ "  given: " ++ showAction action ++ "\n"
-              ++ "  expected: " ++ name
-        (action' :-> r) : actions
-          | Just Refl <- action `eqAction` action' ->
-              (actions, lift r)
-          | otherwise -> error'
-              $ "runMockT: argument mismatch in " ++ fnName ++ "\n"
-              ++ "  given: " ++ showAction action ++ "\n"
-              ++ "  expected: " ++ showAction action' ++ "\n"
+    join $ lift $ atomicModifyMutVar ref $ either error' id . match fnName action
 
+match
+  :: (Action f, PrimMonad m)
+  => String
+  -> f r
+  -> [WithResult f m]
+  -> Either String ([WithResult f m], MockT_ (PrimState m) m f m r)
+match fnName action queue = case queue of
+  [] ->
+    Left
+      $  "runMockT: expected end of program, called "
+      ++ fnName
+      ++ "\n"
+      ++ "  given action: "
+      ++ showAction action
+      ++ "\n"
+  Either a b : actions ->
+    match fnName action (a:actions) <|> match fnName action (b:actions)
+
+  ZeroMatch : _actions -> Left "ZeroMatch"
+
+  SkipWhile f : actions | Just res <- f action -> Right (queue, lift res)
+                        | otherwise -> match fnName action actions
+  Match name f : actions
+    | Just res <- f action
+    -> Right (actions, lift res)
+    | otherwise
+    -> Left
+      $  "runMockT: argument mismatch in "
+      ++ fnName
+      ++ "\n"
+      ++ "  given: "
+      ++ showAction action
+      ++ "\n"
+      ++ "  expected: "
+      ++ name
+  (action' :-> r) : actions
+    | Just Refl <- action `eqAction` action'
+    -> Right (actions, lift r)
+    | otherwise
+    -> Left
+      $  "runMockT: argument mismatch in "
+      ++ fnName
+      ++ "\n"
+      ++ "  given: "
+      ++ showAction action
+      ++ "\n"
+      ++ "  expected: "
+      ++ showAction action'
+      ++ "\n"
 
 error' :: String -> a
 #if MIN_VERSION_base(4,9,0)
