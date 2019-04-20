@@ -25,6 +25,7 @@ module Control.Monad.Mock.Stateless
   , withResultHmap
   ) where
 
+import Control.Monad
 import Control.Monad.Base (MonadBase)
 import Control.Monad.Catch (MonadCatch, MonadThrow, MonadMask)
 import Control.Monad.Cont (MonadCont)
@@ -38,7 +39,7 @@ import Control.Monad.ST (ST)
 import Control.Monad.Trans (MonadTrans(..))
 import Control.Monad.Trans.Control
 import Control.Monad.Writer (MonadWriter)
-import Data.Primitive.MutVar (MutVar, newMutVar, readMutVar, writeMutVar)
+import Data.Primitive.MutVar (atomicModifyMutVar, MutVar, newMutVar, readMutVar, writeMutVar)
 import Data.Type.Equality ((:~:)(..))
 
 import Control.Monad.Mock (Action(..), MonadMock(..))
@@ -96,33 +97,30 @@ runMockST = runMockT
 instance (PrimMonad m, PrimState m ~ s) => MonadMock f (MockT_ s m f m) where
   mockAction fnName action = do
     ref <- MockT ask
-    results <- lift $ readMutVar ref
-    case results of
-      [] -> error'
-        $ "runMockT: expected end of program, called " ++ fnName ++ "\n"
-        ++ "  given action: " ++ showAction action ++ "\n"
-      SkipWhile f : actions
-        | Just res <- f action
-        -> lift res
-        | otherwise -> do
-            lift $ writeMutVar ref actions
-            mockAction fnName action
-      Match name f : actions
-        | Just res <- f action -> do
-            lift $ writeMutVar ref actions
-            lift res
-        | otherwise -> error'
-            $ "runMockT: argument mismatch in " ++ fnName ++ "\n"
-            ++ "  given: " ++ showAction action ++ "\n"
-            ++ "  expected: " ++ name
-      (action' :-> r) : actions
-        | Just Refl <- action `eqAction` action' -> do
-            lift $ writeMutVar ref actions
-            lift r
-        | otherwise -> error'
-            $ "runMockT: argument mismatch in " ++ fnName ++ "\n"
-            ++ "  given: " ++ showAction action ++ "\n"
-            ++ "  expected: " ++ showAction action' ++ "\n"
+    join $ lift $ atomicModifyMutVar ref $ \results ->
+      case results of
+        [] -> error'
+          $ "runMockT: expected end of program, called " ++ fnName ++ "\n"
+          ++ "  given action: " ++ showAction action ++ "\n"
+        SkipWhile f : actions
+          | Just res <- f action
+          -> (results, lift res)
+          | otherwise ->
+              (actions, mockAction fnName action)
+        Match name f : actions
+          | Just res <- f action ->
+              (actions, lift res)
+          | otherwise -> error'
+              $ "runMockT: argument mismatch in " ++ fnName ++ "\n"
+              ++ "  given: " ++ showAction action ++ "\n"
+              ++ "  expected: " ++ name
+        (action' :-> r) : actions
+          | Just Refl <- action `eqAction` action' ->
+              (actions, lift r)
+          | otherwise -> error'
+              $ "runMockT: argument mismatch in " ++ fnName ++ "\n"
+              ++ "  given: " ++ showAction action ++ "\n"
+              ++ "  expected: " ++ showAction action' ++ "\n"
 
 
 error' :: String -> a
