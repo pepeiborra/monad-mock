@@ -56,19 +56,32 @@ data WithResult f m where
   -- | Matches one of a set of commands
   Match     :: String -> (forall r. f r -> Maybe (m r)) -> WithResult f m
   -- | Skips commands as long as the predicate returns something
-  SkipWhile :: (forall r. f r -> Maybe (m r)) -> WithResult f m
+  SkipWhile :: String -> (forall r. f r -> Maybe (m r)) -> WithResult f m
   -- | Choice
   Either    :: WithResult f m -> WithResult f m -> WithResult f m
   -- | Trivial failure
   ZeroMatch   :: WithResult f m
 
+instance Action f => Show (WithResult f m) where
+  show (action :-> _) = showAction action
+  show (Match n _) = n
+  show (SkipWhile n _) = n
+  show (Either a b) = show a ++ " OR " ++ show b
+  show ZeroMatch = "FAIL"
+
 withResultHmap :: (forall a . m a -> n a) -> WithResult f m -> WithResult f n
 withResultHmap f (a :-> mb) = a :-> f mb
-withResultHmap f (SkipWhile cond) = SkipWhile (fmap f . cond)
+withResultHmap f (SkipWhile name cond) = SkipWhile name (fmap f . cond)
 withResultHmap f (Match name cond) = Match name (fmap f . cond)
 withResultHmap f (Either a b) = Either (withResultHmap f a) (withResultHmap f b)
 withResultHmap _ ZeroMatch = ZeroMatch
 
+-- | @MockT_ s n f m a@:
+--   - @s@ - prim monad state
+--   - @n@ - outer monad stack
+--   - @f@ - action functor
+--   - @m@ - lower monad
+--   - @a@ - result type
 newtype MockT_ s n f m a = MockT {unMockT :: ReaderT (MutVar s [WithResult f n]) m a}
   deriving ( Functor, Applicative, Monad, MonadIO, MonadFix
            , MonadState st, MonadCont, MonadError e, MonadWriter w
@@ -96,7 +109,7 @@ runMockT actions (MockT x) = do
     [] -> return r
     remainingActions -> error'
       $ "runMockT: expected the following unexecuted actions to be run:\n"
-      ++ unlines (map (\(action :-> _) -> "  " ++ showAction action) remainingActions)
+      ++ unlines (map (("  " ++) . show) remainingActions)
 
 runMockST :: Action f => [WithResult f (Mock s f)] -> Mock s f a -> ST s a
 runMockST = runMockT
@@ -126,8 +139,8 @@ match fnName action queue = case queue of
 
   ZeroMatch : _actions -> Left "ZeroMatch"
 
-  SkipWhile f : actions | Just res <- f action -> Right (queue, lift res)
-                        | otherwise -> match fnName action actions
+  SkipWhile _ f : actions | Just res <- f action -> Right (queue, lift res)
+                          | otherwise -> match fnName action actions
   Match name f : actions
     | Just res <- f action
     -> Right (actions, lift res)

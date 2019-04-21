@@ -74,7 +74,7 @@ spec = describe "MockT" $ do
   it "SkipWhile" $ do
     let result = runST
           $ copyFileAndReturn "foo.txt" "bar.txt"
-          & runMockT [ SkipWhile (\case ReadFile{} -> Just (pure "skipped") ; _ -> Nothing)
+          & runMockT [ SkipWhile "ReadFile" (\case ReadFile{} -> Just (pure "skipped") ; _ -> Nothing)
                      , (WriteFile "bar.txt" "skipped" :-> pure ()) ]
           & runExceptT
     result `shouldBe` Right "skipped"
